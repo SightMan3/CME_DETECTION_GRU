@@ -1,4 +1,6 @@
 import os, shutil
+
+import requests
 from extractDataSrc.Lasco import Lasco
 from extractDataSrc.InSitu import InSitu
 from extractDataSrc.Eit195 import Eit195
@@ -39,9 +41,55 @@ from skimage.morphology import skeletonize
 from skimage.morphology import disk, binary_opening
 
 
-"""
-    Loading images and metadata
-"""
+decision = input('Want to dowload images? (y/n) ')
+if decision.lower() == 'y':
+    
+    """
+        Loading images and metadata
+    """
+    def download_metadata(time_str):
+        original_datetime = datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S")
+        date_str = original_datetime.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        url = f"https://api.helioviewer.org/v2/getClosestImage/?date={date_str}&sourceId=5"
+
+        try:
+            response = requests.get(url)
+            response.raise_for_status()  # Raise an error for bad status codes
+            
+            data = response.json()
+            
+            # Save the JSON data to the specified path
+            with open("./data_processed/lasco/c3/images_metadata" + ".json", 'w') as f:
+                json.dump(data, f, indent=4)
+        
+
+        except requests.exceptions.RequestException as e:
+            print(f"Error fetching data from Helioviewer API: {e}")
+        except IOError as e:
+            print(f"Error saving file to ./data_processed/lasco/c3/images_metadata.json: {e}")
+
+
+    print('Downloading coronograph images -----------------')
+        
+    folder = './data_processed/lasco/c3/'
+    for filename in os.listdir(folder):
+        file_path = os.path.join(folder, filename)
+        try:
+            if os.path.isfile(file_path) or os.path.islink(file_path):
+                os.unlink(file_path)
+            elif os.path.isdir(file_path):
+                shutil.rmtree(file_path)
+        except Exception as e:
+            print('Failed to delete %s. Reason: %s' % (file_path, e))
+
+    start_date = '2015-06-21 00:00:00'
+    stop_date = '2015-06-21 10:00:00'
+
+    download_metadata(start_date)
+    lasco = Lasco(start_date, stop_date)
+    lasco.extract_data("c3")
+
+
 images = []
 
 for im in os.listdir('./data_processed/lasco/c3'):
@@ -50,11 +98,11 @@ for im in os.listdir('./data_processed/lasco/c3'):
         images.append(np.array(img.convert('L')))
 
 
-png_file = 'data_processed/lasco/c3/20230421_0806_lascoc3_1024.png'
+png_file = f'data_processed/lasco/c3/{os.listdir("data_processed/lasco/c3")[0]}'
 img = Image.open(png_file)
 image_data = np.array(img.convert('L'))
 
-json_file = 'data_processed/lasco/c3/20230421_0806_lascoc3_1024.json'
+json_file = 'data_processed/lasco/c3/images_metadata.json'
 
 with open(json_file, 'r') as f:
     metadata = json.load(f)
@@ -188,7 +236,7 @@ def cme_blob_detection(j_map, verbose=True):
     j_map_eq = exposure.equalize_adapthist(j_map_norm, clip_limit=0.03)
 
     j_map_blobs = meijering(j_map_eq, sigmas=range(1, 4), black_ridges=False)
-    threshold = np.percentile(j_map_blobs, 93) 
+    threshold = np.percentile(j_map_blobs, 95) 
     binary_j_map = j_map_blobs > threshold
 
     label_image = label(binary_j_map)
@@ -253,7 +301,7 @@ def cme_blob_detection(j_map, verbose=True):
         velocity_arcsec_per_sec = abs(1.0 / slope) * (dr_arcsec_per_pixel / dt_seconds)
         velocity_km_s = velocity_arcsec_per_sec * ARCSEC_TO_KM
         
-        # t_onset_idx = abs(y0 - slope * x0)
+        t_onset_idx = abs(y0 - slope * x0)
         
         ellipse_patch = Ellipse(
             xy=center_xy,
@@ -275,7 +323,7 @@ def cme_blob_detection(j_map, verbose=True):
                 'minor_axis': minor_axis,
                 'slope': slope,
                 'velocity_km_s': velocity_km_s,
-                't_onset_idx': y0
+                't_onset_idx': math.ceil(t_onset_idx)
             })
 
         if verbose and slope < 1:
@@ -283,7 +331,7 @@ def cme_blob_detection(j_map, verbose=True):
             ax.plot(np.linspace(57, 100, 100), -slope*np.linspace(0, 100, 100) + y0)
             
             print(f"Blob at (x={x0:.0f}, y={y0:.0f}): Angle deg{math.degrees(angle_rad):.1f} deg, Length {major_axis:.1f}, angle rad {angle_rad:.1f}rad")
-            print('slope: ', slope, 'velocity: ', velocity_km_s, 't_onset_index: ', y0)
+            print('slope: ', slope, 'velocity: ', velocity_km_s, 't_onset_index: ', t_onset_idx)
             print()
 
 
@@ -429,23 +477,7 @@ print(json.dumps(cluster_dict, indent=4))
 
 
 """
-    TODO:
-    1. Urcenie spravneho CME s pomedzi viacerych detekcii.
-        - Ak ma cluster > 10 detekcii.
-        1.1. Treba vymysliet sposob ako odvodit, ci priemery onset time pre nejaky index je ten korektny.
-        1.2. Dokazat, ze 90% percentil rychlosti je naozaj optimalny sposob vypoctu vyslednej rychlosti eventu.
-
-    2. Spravit stahovanie obrazkov
-        2.1. Stahovat iba jeden JSON, teda stiahnut raz pred obrazkami, potom obrazky bez JSON! 
-    
-"""
-
-
-"""
-    1. To sa da spravit tak, ze v pripade HALO eventov budeme kontrolovat angular width
-        - Vseobecne podmienky moze byt STD, sirka distribucie a box-plot rychlosti a t-onset-index
-        - Tieto veliciny by sa nemali brutalne lisit od seba, aspon teda t-onset-index. Teda velke STD a siroka
-          distribucia by mohla naznacovat ze to nie je spravny event.
-        - V zasade ak cluster s najviac hodnotami bude mat najlepsu distribuciu/STD z pomedzi ostatnych, 
-          tak to moze byt ten spravny event. 
+Version 0.2
+Added onset time calculation as t_onset_idx = abs(y0 - slope * x0) and added it to the cme_detection dictionary.
+This should make onseet time approximation better
 """

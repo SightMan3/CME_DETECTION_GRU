@@ -1,0 +1,18 @@
+{
+    "id": "125650913",
+    "date": "2015-06-18 14:42:06",
+    "name": "LASCO C3",
+    "scale": 56,
+    "scaleCorrection": 1,
+    "width": 1024,
+    "height": 1024,
+    "refPixelX": 519.2,
+    "refPixelY": 533.5,
+    "offsetX": 0,
+    "offsetY": 0,
+    "rotation": 6.88614,
+    "rsun": 17.1365,
+    "dsun": 149597870700,
+    "sunCenterOffsetParams": [],
+    "layeringOrder": 3
+}

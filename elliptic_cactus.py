@@ -82,8 +82,8 @@ if decision.lower() == 'y':
         except Exception as e:
             print('Failed to delete %s. Reason: %s' % (file_path, e))
 
-    start_date = '2015-06-21 00:00:00'
-    stop_date = '2015-06-21 10:00:00'
+    start_date = '2024-08-08 17:00:00'
+    stop_date = '2024-08-09 10:00:00'
 
     download_metadata(start_date)
     lasco = Lasco(start_date, stop_date)

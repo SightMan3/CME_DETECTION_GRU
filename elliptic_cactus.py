@@ -82,8 +82,8 @@ if decision.lower() == 'y':
         except Exception as e:
             print('Failed to delete %s. Reason: %s' % (file_path, e))
 
-    start_date = '2024-08-08 17:00:00'
-    stop_date = '2024-08-09 10:00:00'
+    start_date = '2024-05-09 07:00:00'
+    stop_date = '2024-05-09 17:00:00'
 
     download_metadata(start_date)
     lasco = Lasco(start_date, stop_date)
@@ -114,8 +114,9 @@ center_y = 512
 
 arcsec_per_pixel = metadata['scale']
 ARCSEC_TO_KM = 725.0    # Approximate conversion at 1 AU
-V_MIN_KM_S = 100.0      # Minimum plausible CME speed
+V_MIN_KM_S = 250.0      # Minimum plausible CME speed
 V_MAX_KM_S = 2000.0     # Maximum plausible CME speed
+
 rsun_pixels = metadata['rsun']
 
 height, width = image_data.shape
@@ -123,12 +124,37 @@ height, width = image_data.shape
 y_indices, x_indices = np.indices((height, width))
 
 x_rel_pixels = x_indices - center_x
-y_rel_pixels = y_indices - center_y
+y_rel_pixels = center_y - y_indices
 
 x_arcsec = x_rel_pixels * arcsec_per_pixel
 y_arcsec = y_rel_pixels * arcsec_per_pixel
 
 r_arcsec = np.sqrt(x_arcsec**2 + y_arcsec**2)
+
+theta_arcsec = np.arctan2(y_arcsec, x_arcsec)
+theta_arcsec = np.mod(theta_arcsec, 2 * np.pi)
+
+
+"""
+Calculate the angle of the pylon
+"""
+best_pylon_cover = None
+phi = None
+for pylon_angle in np.arange(0.01, 2, 0.01):
+    pylon_mask = (theta_arcsec < pylon_angle*np.pi) & \
+                (theta_arcsec > (pylon_angle - 7/100)*np.pi) & \
+                (r_arcsec > 4.7*rsun_pixels*arcsec_per_pixel) & \
+                (r_arcsec < 512*arcsec_per_pixel)
+
+
+    pylon = image_data[pylon_mask]
+    match_count = np.sum(pylon < 5)
+    total_count = len(pylon)
+
+
+    if best_pylon_cover is None or match_count / total_count > best_pylon_cover:
+        best_pylon_cover = match_count / total_count
+        phi = pylon_angle
 
 
 """
@@ -138,12 +164,13 @@ r_arcsec = np.sqrt(x_arcsec**2 + y_arcsec**2)
 def image_masking(image_data):
     mask = (r_arcsec < 4.7*rsun_pixels*arcsec_per_pixel
        ) | (r_arcsec > 512*arcsec_per_pixel
-       ) | ((theta_arcsec < (3/4)*np.pi) & (theta_arcsec > (3/4 - 7/100)*np.pi))
+       ) | ((theta_arcsec < phi*np.pi) & (theta_arcsec > (phi - 7/100)*np.pi))
 
     image_data_masked = image_data.copy().astype(np.float32)
     image_data_masked[mask] = np.nan
 
     return image_data_masked
+
 
 
 
@@ -166,7 +193,7 @@ def prepare_image(image):
     theta_arcsec = np.arctan2(y_arcsec, x_arcsec)
     mask = (r_arcsec < 4.7*rsun_pixels*arcsec_per_pixel
        ) | (r_arcsec > 512*arcsec_per_pixel
-       ) | ((theta_arcsec < (3/4)*np.pi) & (theta_arcsec > (3/4 - 7/100)*np.pi))
+       ) | ((theta_arcsec < phi*np.pi) & (theta_arcsec > (phi - 7/100)*np.pi))
 
     image_data_masked = image.copy().astype(np.float32)
     image_data_masked[mask] = np.nan
@@ -270,26 +297,24 @@ def cme_blob_detection(j_map, verbose=True):
         y_coords = props.coords[:, 0]
         
         unique_radii = np.unique(x_coords)
-        leading_edge_y_min = []
-        leading_edge_y_max = []
-        leading_edge_x = []
 
         min_y_edge = [np.min(y_coords[x_coords == r]) for r in unique_radii]
         max_y_edge = [np.max(y_coords[x_coords == r]) for r in unique_radii]
 
-        # Fit both
         slope_min = np.polyfit(unique_radii, min_y_edge, 1)[0]
         slope_max = np.polyfit(unique_radii, max_y_edge, 1)[0]
     
-        leading_edge_slope = min(abs(slope_min), abs(slope_max))
+        slope = min(abs(slope_min), abs(slope_max))
 
-
+       
         """
         End leading edge slope calculation
         """
 
-        # slope = math.tan(angle_rad)
-        slope = leading_edge_slope
+        
+        track_length_x = np.max(x_coords) - np.min(x_coords)
+        if track_length_x < 30:
+            continue
         if slope <= 0.02:
             continue
 
@@ -301,7 +326,7 @@ def cme_blob_detection(j_map, verbose=True):
         velocity_arcsec_per_sec = abs(1.0 / slope) * (dr_arcsec_per_pixel / dt_seconds)
         velocity_km_s = velocity_arcsec_per_sec * ARCSEC_TO_KM
         
-        t_onset_idx = abs(y0 - slope * x0)
+        t_onset_idx = abs(y0 + slope * x0)
         
         ellipse_patch = Ellipse(
             xy=center_xy,
@@ -353,7 +378,7 @@ def all_angles_detections_blobs(images):
 
 
 def fill_factor(cluster):
-    c1_angles = cluster['angle'].sort_values().values # Ensure it's a numpy array
+    c1_angles = cluster['angle'].sort_values().values
     
     if len(c1_angles) <= 1:
         return 0.0, 0.0
@@ -379,6 +404,11 @@ def quality_score(flat_clusters):
     for cluster_id in flat_clusters['cme_cluster_id'].unique():
 
         cluster = flat_clusters[flat_clusters['cme_cluster_id'] == cluster_id]
+
+        'Velocity calculation:'
+        cluster = cluster.sort_values('angle')
+        smoothed_velocities = cluster['velocity_km_s'].rolling(window=3, center=True, min_periods=1).median()
+        true_cme_velocity = smoothed_velocities.max()
         
         v = cluster['velocity_km_s']
         t = cluster['t_onset_idx']
@@ -396,11 +426,18 @@ def quality_score(flat_clusters):
 
         qs = (0.4 * norm_AW) + (0.3 * norm_FF) + (0.15 * norm_cv_v) + (0.15 * norm_cv_t)
 
+        ot = math.floor(t.mean().item())
+        iot = len(images) - ot
+        onset_image_date, onset_image_datetime, _, _ = os.listdir('./data_processed/lasco/c3/')[iot].split('_')
+
         cluster_dict[cluster_id.item()] = {
             "zscore_velocity": cv_v.item(),
             "zscore_onset_time": cv_t.item(),
-            "velocity_km_s": v.quantile(0.9).item(),
-            "onset_time": t.mean().item(),
+            "velocity_km_s": true_cme_velocity.item(),
+            "onset_time_idx": ot,
+            'onset_time_inverse_idx': iot,
+            'onset_date': onset_image_date,
+            'onset_datetime': onset_image_datetime,
             "angular_width": AW.item(),
             'fill_factor': FF.item(),
             'THETA': qs.item()
@@ -438,12 +475,6 @@ for i in range(1, len(polar_maps)):
     running_difference.append(
         np.clip(polar_maps[i] - polar_maps[i-1], 0, 255)
     )
-    # running_difference.append(
-    #     polar_maps[i] - polar_maps[i-1]
-    # )
-
-
-
 
 
 detections = all_angles_detections_blobs(running_difference)
@@ -464,7 +495,7 @@ flat_clusters = pd.DataFrame()
 
 for c in detections['cme_cluster_id'].unique():
     cc = detections[detections['cme_cluster_id'] == c].groupby('angle').agg({
-            't_onset_idx': 'median', # Pandas automatically finds the median timestamp!
+            't_onset_idx': 'median',
             'velocity_km_s': 'median',
             'cme_cluster_id': 'min'
         }).reset_index()
@@ -479,5 +510,16 @@ print(json.dumps(cluster_dict, indent=4))
 """
 Version 0.2
 Added onset time calculation as t_onset_idx = abs(y0 - slope * x0) and added it to the cme_detection dictionary.
-This should make onseet time approximation better
+This should make onset time approximation better
+
+Version 0.3
+Created dynamic occulter pylon masking
+
+Version 0.4
+Better velocity calculation
+"""
+
+"""
+TODO:
+- Preskumat frekvenciu CMEs ktore maju AW HALO alebo blizko HALO teda > 300 stupnov
 """

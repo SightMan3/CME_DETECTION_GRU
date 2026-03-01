@@ -1,0 +1,5 @@
+Ak algooritmus na ddetekciu CME aproximuje rychlost vacsiu ako je realne namerana, tak je to lepsie ako by rychlost bola aproximovana
+pomalsia nez aka realne mat byt. V pripade ak je aproximovana rychlost napr. 400km/s ale realna je 790 km/s tak je to horsie ako keby 
+sme aproximovalii 900km/s.
+    Ak je rychlost aproximovana rychlejsie ako ma byt najhorsie co sa moze stat, budeme skor pripraveny. V opacnom pripade by nas prichod
+na zem prekvapil skor ako cakame co by mohlo mat katastrofalne nasledky. Tomuto javu sa hovori prioritizaciu chyby beta nad chybou alfa.

@@ -1,6 +1,6 @@
 {
-    "id": "165634874",
-    "date": "2024-08-08 16:54:08",
+    "id": "156571846",
+    "date": "2024-05-09 06:54:07",
     "name": "LASCO C3",
     "scale": 56,
     "scaleCorrection": 1,
@@ -10,7 +10,7 @@
     "refPixelY": 533.5,
     "offsetX": 0,
     "offsetY": 0,
-    "rotation": -176.624,
+    "rotation": 6.25645,
     "rsun": 17.1365,
     "dsun": 149597870700,
     "sunCenterOffsetParams": [],

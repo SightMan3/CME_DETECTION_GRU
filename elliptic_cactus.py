@@ -38,7 +38,7 @@ from skimage.feature import canny
 from skimage.transform import hough_line, hough_line_peaks
 from skimage.filters import meijering
 from skimage.morphology import skeletonize
-from skimage.morphology import disk, binary_opening
+from skimage.morphology import disk, binary_opening, closing
 
 
 decision = input('Want to dowload images? (y/n) ')
@@ -255,7 +255,7 @@ def create_jmap(diff_ims, angle):
     return j_map
 
 
-def cme_blob_detection(j_map, verbose=True):
+def cme_blob_detection(j_map, percentil, disk_size, verbose=True):
     j_map_clean = np.nan_to_num(j_map, nan=0.0, posinf=0.0, neginf=0.0)
     p1, p99 = np.percentile(j_map_clean, (1, 99))
     j_map_clipped = np.clip(j_map_clean, p1, p99)
@@ -263,8 +263,9 @@ def cme_blob_detection(j_map, verbose=True):
     j_map_eq = exposure.equalize_adapthist(j_map_norm, clip_limit=0.03)
 
     j_map_blobs = meijering(j_map_eq, sigmas=range(1, 4), black_ridges=False)
-    threshold = np.percentile(j_map_blobs, 95) 
+    threshold = np.percentile(j_map_blobs, percentil) 
     binary_j_map = j_map_blobs > threshold
+    binary_j_map = closing(binary_j_map, disk(disk_size))
 
     label_image = label(binary_j_map)
 
@@ -305,6 +306,10 @@ def cme_blob_detection(j_map, verbose=True):
         slope_max = np.polyfit(unique_radii, max_y_edge, 1)[0]
     
         slope = min(abs(slope_min), abs(slope_max))
+
+        # leading_edge_y = [np.max(y_coords[x_coords == r]) for r in unique_radii]
+        # slope, intercept, low_slope, up_slope = scipy.stats.theilslopes(leading_edge_y, unique_radii)
+        # slope = abs(slope)
 
        
         """
@@ -367,7 +372,11 @@ def all_angles_detections_blobs(images):
     rows = []
     for angle in range(0, 360, 5):
         j_map = create_jmap(images, angle)
-        cme = cme_blob_detection(j_map, verbose=False)
+        cme = cme_blob_detection(j_map, 
+                                    percentil=95, 
+                                    disk_size=2, 
+                                    verbose=False
+                                )
 
         for r in cme:
             r['angle'] = angle
@@ -405,7 +414,8 @@ def quality_score(flat_clusters):
 
         cluster = flat_clusters[flat_clusters['cme_cluster_id'] == cluster_id]
 
-        'Velocity calculation:'
+        # Velocity calculation: smoothing the velocity, getting rid of noise and taking the maximum
+        # Taking the 'nose' of the velocity
         cluster = cluster.sort_values('angle')
         smoothed_velocities = cluster['velocity_km_s'].rolling(window=3, center=True, min_periods=1).median()
         true_cme_velocity = smoothed_velocities.max()
@@ -522,4 +532,9 @@ Better velocity calculation
 """
 TODO:
 - Preskumat frekvenciu CMEs ktore maju AW HALO alebo blizko HALO teda > 300 stupnov
+
+IDEAS:
+- Mam dva hlavne hyperparametre, percentile pre jmap filter a disk size pre spajanie okolitych pixelov.
+Pre kazdy event viem najst optimalne nastavenie fltrov pre ktore dostanem najlepsiu aproximaciu rychlosti.
+Zaznamenat a po prejdeni vela eventov zpreiemerovat.
 """

@@ -40,6 +40,17 @@ from skimage.filters import meijering
 from skimage.morphology import skeletonize
 from skimage.morphology import disk, binary_opening, closing
 
+def get_date_range(date_str):
+    dt = datetime.strptime(date_str, '%Y-%m-%d %H:%M:%S')
+    
+    start = (dt - timedelta(hours=2)).replace(minute=0, second=0)
+    end = dt + timedelta(hours=12)
+    
+    return (
+        start.strftime('%Y-%m-%d %H:%M:%S'),
+        end.strftime('%Y-%m-%d %H:%M:%S')
+    )
+
 
 decision = input('Want to dowload images? (y/n) ')
 if decision.lower() == 'y':
@@ -82,8 +93,8 @@ if decision.lower() == 'y':
         except Exception as e:
             print('Failed to delete %s. Reason: %s' % (file_path, e))
 
-    start_date = '2024-05-09 07:00:00'
-    stop_date = '2024-05-09 17:00:00'
+    init_date = input('Insert real onset event date: ')
+    start_date, stop_date = get_date_range(init_date)
 
     download_metadata(start_date)
     lasco = Lasco(start_date, stop_date)
@@ -373,7 +384,7 @@ def all_angles_detections_blobs(images):
     for angle in range(0, 360, 5):
         j_map = create_jmap(images, angle)
         cme = cme_blob_detection(j_map, 
-                                    percentil=95, 
+                                    percentil=97, 
                                     disk_size=2, 
                                     verbose=False
                                 )
@@ -513,6 +524,8 @@ for c in detections['cme_cluster_id'].unique():
     flat_clusters = pd.concat([flat_clusters, cc])
 
 
+print(detections)
+
 cluster_dict = quality_score(flat_clusters)
 print(json.dumps(cluster_dict, indent=4))
 
@@ -526,7 +539,8 @@ Version 0.3
 Created dynamic occulter pylon masking
 
 Version 0.4
-Better velocity calculation
+Better velocity calculation, disk: connecting pixels in some range of some circle drawn around them
+
 """
 
 """

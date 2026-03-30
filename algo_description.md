@@ -4,9 +4,8 @@
 2. Dynamic mask for removing black regions
 3. Preprocess images (running diff, to polar, polar map, j-map)
 4. Main detection algorithm
-5. Process detections (clustering, filtering)
-6. Choose best detection
-7. Synthetize data based on onset time and velocity approximation.
+5. Process detections (clustering, filtering, choosing best detection)
+6. Synthetize data based on onset time and velocity approximation.
 
 
 
@@ -129,9 +128,114 @@ And also few things about saving the detection in some form but that is not that
 ## 4.1 More preprocessing.
 In this step we alter the image but not in a way we did until now. It will be only filtering of noise and applying functions that form the structures in the image to a state that gives us better chances at detecting even the faintest of CMEs. Things like amplification, morphing pixels, etc...
 
-We do things like clipping 1st and 99th percentile, which is just noise. Normalazing the jmap image. Thresholding so that only black and white pixels are present. One of the more important function we use is $\text{mijering}()$. In image processing, the Meijering filter is a specialized algorithm used to detect and enhance continuous, thin, and elongated "ridge-like" or "tubular" structures in an image. Applying it essentially dims the background and highlights objects that look like intersecting lines, webs, or branches. Which is perfect for our usecase and exactly what we need. The last operation that is applied is $\text{closing}()$ in combination with $\text{disk}()$. It creates an artificial disk around a pixel and if there is a pixel in the vicinity of the disk, it connects the two pixels. CMEs on the start and ends of the branch like structure in jamp are sometimes torn and the faintest strucutres are just wandering blobs of pixels, but when connected to the main core structure, it can enhance the approximation of velocity greatly as testing showed.
+We do things like clipping 1st and 99th percentile, which is just noise. Normalazing the jmap image. Thresholding so that only black and white pixels are present. One of the more important function we use is $\text{mijering}()$. In image processing, the Meijering filter is a specialized algorithm used to detect and enhance continuous, thin, and elongated "ridge-like" or "tubular" structures in an image. Applying it essentially dims the background and highlights objects that look like intersecting lines, webs, or branches. Which is perfect for our usecase and exactly what we need. The last operation that is applied is $\text{closing}()$ in combination with $\text{disk}()$. It creates an artificial disk around a pixel and if there is a pixel in the vicinity of the disk, it connects the two pixels. CMEs on the start and ends of the branch like structure in jamp are sometimes torn and the faintest strucutres are just wandering blobs of pixels, but when connected to the main core structure, it can enhance the approximation of velocity greatly as testing showed. It however tampered little bit with the angular width detection and time of onset in C3, however we need to prioritze accurate velocity detection over angular width as this impacts the outcome of our model the most.
 
 ## 4.2. Detection
+### Mathematical Principles
+The core principle of this algorithm is modeling Coronal Mass Ejection (CME) tracks in J-maps by fitting an inclined ellipse to the detected blobs. These blobs are isolated using a Meijering ridge-detection filter.The fitted ellipse is defined in parametric form:$$\frac{(x\cos\theta + y\sin\theta)^2}{(L/2)^2} + \frac{(y\cos\theta - x\sin\theta)^2}{(W/2)^2} = 1$$
+Where:
+- $\theta$ is the orientation angle of the ellipse relative to the x-axis.
+- $L$ is the length of the major axis.
+- $W$ is the length of the minor axis.
+
+To determine the kinematics of the CME, we calculate its velocity. Instead of relying simply on the angle of the major axis ($\theta$), the algorithm calculates the slope of the leading edge of the blob to better represent the propagating front of the CME. The kinematic velocity is then calculated as:$$v = \left|\frac{1}{m}\right| \cdot \frac{dr}{dt}$$
+Where:
+- $m$ is the calculated slope of the leading edge.
+- $dr$ is the spatial resolution (change in arcseconds per pixel).
+- $dt$ is the temporal resolution (change in time per pixel in seconds).
+
+To filter out noise and unrealistic detections (such as nearly vertical or horizontal slopes), the algorithm checks if the calculated velocity falls within realistic bounds for a CME. Only blobs with a final velocity between 250 km/s and 2000 km/s are retained.Additionally, the estimated onset time index is derived linearly from the centroid coordinates ($x_0, y_0$) and the leading edge slope:$$t_{\text{onset}} = |y_0 + m \cdot x_0|$$
+
+### Region Extraction & Filtering
+Algorithm groups the connected binary pixels into distinct objects using $\text{regionprops}()$ these are the blobs we will do calculations with. Than applies simple filter that discards any blobs with a pixel area smaller than 40 to remove small noise artifacts.
+
+### Main pipeline
+For every valid blob, the algorithm extracts its centroid, major/minor axes, and orientation. It then performs the following calculations. Leading Edge Slope Calculation: Iterates through the unique x-coordinates of the blob. It finds the minimum and maximum y-coordinates for each x-slice, effectively tracing the top and bottom edges of the track. It fits a linear polynomial (degree 1) to both edges and selects the slope with the smallest absolute value to represent the leading edge ($m$). Discards tracks shorter than 30 pixels in the x-direction. Discards near-horizontal tracks (slope $\le$ 0.02). Converts the pixel-based slope into real-world units (arcseconds per second) using predefined constants ($R_{arcsec}$ bounds, and an assumed $dt$ of 12 minutes), and subsequently converts it to km/s. 12 minutes because 1 pixel, on the time axis, is 12 minutes wide, and we need to know that for the conversion calculation.
+Here is the full calculation of speed in code:
+- **Spatial resolution** ($dr$): Calculated based on the field of view bounds ($R_{\text{max}}$ and $R_{\text{min}}$ in arcseconds) distributed over the 512-pixel height of the J-map slice:
+$$dr = \frac{R_{\text{max}} - R_{\text{min}}}{512}$$
+- **Temporal resolution** ($dt$): Assumes a standard image cadence of 12 minutes, converted to seconds:
+$$dt = 12 \cdot 60 = 720 \text{ s}$$
+- **Final Calculation**: The velocity is first calculated in arcseconds per second using the leading edge slope ($m$) with the formula we introduced earlier, and then converted to kilometers per second using a predefined conversion constant (ARCSEC_TO_KM):$$v_{\text{arcsec/s}} = \left| \frac{1}{m} \right| \cdot \frac{dr}{dt}$$
+$$v_{\text{km/s}} = v_{\text{arcsec/s}} \cdot \text{ARCSEC\_TO\_KM}$$
+
+If the blob's calculated velocity falls within the defined physical bounds (250 km/s to 2000 km/s), the properties of the CME (centroid, axes, slope, velocity, and onset index) are saved and returned in a dictionary.
+
+# 5. Detection processing
+The process of detection is applied only one j-map which we know is representation of only one angle from the corona. We have to do this for every angle j-map. However applying detection 360x is time consuming if we have to do over and over. For simplicity we used 5 angle sample rate, this means we are making only one j-map per 5 angles, which is 360/5 = 72 j-maps and also roughly 72 detections. Roughly because we cant get no detections for certain angles, or multiple detections for certain angle. And that's where detection processing comes in. We need to know which detections are the CME we are trying to detect and which are noise or some other types of objects like jets.
+
+## 5.1 Clustering
+We create clusters of detections based on thir approximated $OT$. For every detection in a list we calculate to which cluster it falls into. Its just a number 0,1,2,3,4,... It filters out clusters with less than 10 detections, because 10 angles or less cant be a valid cme. CMEs we want to detect have angular width of at least 60-70 degrees, even then there is not big likelyhood of a CME with 60 degree PA heading towards earth.
+
+## 5.2 Quality score & fill factor
+After individual detections are grouped into clusters based on their onset times, the algorithm must determine which cluster represents the most probable CME. This is achieved by calculating a composite Quality Score ($\Theta$) for each cluster.The evaluation relies on assessing the physical structure (Angular Width and Fill Factor) and kinematic coherence (variance in velocity and onset time) of the cluster.
+
+Let $Q$ be a cluster, $Q = \{q_1, q_2, \ldots, q_n\}$, where $q_i$ is a detection. We than calculate the score $\Theta$ for the cluster $Q$ as:
+$$
+\Theta_{Q} = w_1\Delta\theta_Q + w_2CV_{Q_t} + w_3CV_{Q_v}  
+$$
+
+**Fill Factor** tells us how continuous is the cluster. When our true angular width $\Delta\theta_Q$ of the cluster $Q$ is for example 340 degrees, then we expect at least $340/5$ (divided by 5 because that is our resolution) detections in the cluster $Q$, we will call this value as expected number of detections $\epsilon_Q = \Delta\theta_Q/5$ and the true number of **unique** detections will be just $|Q|$ the size of the set. 
+$$
+FF_Q = \frac{|Q|}{\epsilon_Q} \cdot 100
+$$
+We can incorporate this into our score:
+$$
+\Theta_{Q} = w_1\Delta\theta_Q + w_4FF_Q + w_2CV_{Q_t} + w_3CV_{Q_v}
+$$
+
+Where CV is coeffcient of variation of the clusters velocity and onset time. We invert its value to make a higher value better. Like so:
+$$
+CV_{Q_t} = \text{max}(0, 1 - CV_{Q_t} )
+$$
+$$
+CV_{Q_v} = \text{max}(0, 1 - CV_{Q_v} )
+$$
+
+### True angular width $\Delta \theta$
+Instead of simply taking the difference between the maximum and minimum angles (which fails when a CME crosses the 360°/0° boundary), the algorithm calculates the gaps between all adjacent, sorted angles. It also calculates the "wrap-around" gap to account for the circular geometry of the coronagraph:
+$$\text{Wrap Gap} = (360^\circ - \theta_{\text{last}}) + \theta_{\text{first}}$$
+The true Angular Width is defined by subtracting the single largest empty gap from the full 360-degree circle:
+$$\Delta \theta = 360^\circ - \text{max}(\text{gaps})$$
+
+### Kinematic Coherence: Coefficient of Variation (CV)
+A physical CME should exhibit relatively consistent velocities and onset times across its angular span. To measure this coherence, the algorithm calculates the Coefficient of Variation (CV) for both velocity ($v$) and onset time ($t$). CV is the ratio of the standard deviation to the mean:$$CV_v = \frac{\sigma_v}{\mu_v}, \quad CV_t = \frac{\sigma_t}{\mu_t}$$A lower CV indicates higher coherence (less noise). To translate this into a scoring metric where "higher is better," the CV is inverted and bounded at zero:
+$$\text{Norm\_CV}_v = \text{max}(0, 1 - CV_v)$$
+$$\text{Norm\_CV}_t = \text{max}(0, 1 - CV_t)$$
+
+### Representative Velocity Estimation
+
+To report a single, realistic velocity for the entire CME cluster, the algorithm sorts the detections by angle and applies a rolling median filter (with a window size of 3). This smooths out local outliers and noise. The maximum value of these smoothed velocities is taken as the true CME velocity, effectively identifying the fastest moving part of the leading edge (the "nose" of the CME).
+
+
+### Conclusion
+Naturally the cluster with highest quality score is considered as the best candidate for the CME we are detecting, and its approximated velocity and onset time will be used for further calculations and will be considered as real.
+
+# 6. Synthetic velocity
+After appriximating the velocity and onset time of CME we can use these values to calculate expected evolution of CMEs velocity over time until it gets to earth.
+
+The main idea is to create time series of angular width and of velocity. The velocity will be modeled with drag based model. We will use the intial velocity calculated with the cme detection algorithm as initial condition for the equation for velocity over time:
+
+$$
+v(t) = \frac{v_0 - w}{1 +\gamma(v_0 - w)t} + w
+$$
+
+where $v_0$ is the initial velocity, $w$ is the wind velocity, $\gamma$ is the drag coefficient which we will set to $0.5 \times 10^{-7}$, this will we be later adjusted based on the angular width of CMEs, if the CME is halo, that means it has more mass, so it will go through space easier and should experience lower drag compared to CMEs with angular width less than 120 degrees. $t$ is the time elapsed since launch in seconds.
+
+The velocity function give us velocity at time t, so we will need a time span in which the cme is propagating through space towards earth. That we will calculate by solving this equation for $t$:
+$$
+r(t) = \frac{1}{\gamma} \ln{\left(1 + \gamma(v_0 - w)t\right)} + tw + r_0.
+$$
+
+
+These attributes will than further be used for training prediction models. Because this velocity attribute is purely synthetic there is no noise which maximazes the information yield for the prediction model.
+
+
+
+
+
+
+
 
 
 

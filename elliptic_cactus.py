@@ -547,8 +547,4 @@ Better velocity calculation, disk: connecting pixels in some range of some circl
 TODO:
 - Preskumat frekvenciu CMEs ktore maju AW HALO alebo blizko HALO teda > 300 stupnov
 
-IDEAS:
-- Mam dva hlavne hyperparametre, percentile pre jmap filter a disk size pre spajanie okolitych pixelov.
-Pre kazdy event viem najst optimalne nastavenie fltrov pre ktore dostanem najlepsiu aproximaciu rychlosti.
-Zaznamenat a po prejdeni vela eventov zpreiemerovat.
 """

@@ -3,17 +3,3 @@ pomalsia nez aka realne mat byt. V pripade ak je aproximovana rychlost napr. 400
 sme aproximovalii 900km/s.
     Ak je rychlost aproximovana rychlejsie ako ma byt najhorsie co sa moze stat, budeme skor pripraveny. V opacnom pripade by nas prichod
 na zem prekvapil skor ako cakame co by mohlo mat katastrofalne nasledky. Tomuto javu sa hovori prioritizaciu chyby beta nad chybou alfa.
-
-Body na meeting 11.3.2026
-1. Zmeny v kode
-    1.1. Dynamic pylon detection
-    1.2. Oprava rychlosti
-    1.3. Lepsia aproximacia rychlosti
-
-2. Excel s testovanymi eventmi
-3. Nefunguje CME catalog 
-4. Dokument o fungovani algoritmu
-
-
-2-3 slidy
-2 minuty cca.

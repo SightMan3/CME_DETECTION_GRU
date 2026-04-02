@@ -2,26 +2,12 @@ import os, shutil
 
 import requests
 from extractDataSrc.Lasco import Lasco
-from extractDataSrc.InSitu import InSitu
-from extractDataSrc.Eit195 import Eit195
 from datetime import datetime, timedelta
-
-import sunpy.timeseries as ts
-from sunpy.net import Fido, attrs as a
-from extractDataSrc.Hapi import get_hapi_data
 
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 
-import sunpy
-from sunpy.net import attrs as a
-from astropy.time import Time
-import astropy.units as u
-import sunpy.map
-import scipy.ndimage as ndi
-import albumentations
-import cv2 as cv
 import scipy
 
 from PIL import Image
@@ -33,12 +19,8 @@ import math
 from matplotlib.patches import Ellipse
 
 from skimage import exposure
-from skimage.feature import canny
-
-from skimage.transform import hough_line, hough_line_peaks
 from skimage.filters import meijering
-from skimage.morphology import skeletonize
-from skimage.morphology import disk, binary_opening, closing
+from skimage.morphology import disk, closing
 
 def get_date_range(date_str):
     dt = datetime.strptime(date_str, '%Y-%m-%d %H:%M:%S')
@@ -528,6 +510,9 @@ print(detections)
 
 cluster_dict = quality_score(flat_clusters)
 print(json.dumps(cluster_dict, indent=4))
+
+
+
 
 
 """

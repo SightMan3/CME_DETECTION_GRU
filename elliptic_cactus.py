@@ -366,7 +366,7 @@ def all_angles_detections_blobs(images):
     for angle in range(0, 360, 5):
         j_map = create_jmap(images, angle)
         cme = cme_blob_detection(j_map, 
-                                    percentil=97, 
+                                    percentil=96, 
                                     disk_size=2, 
                                     verbose=False
                                 )
@@ -403,6 +403,21 @@ def fill_factor(cluster):
 def quality_score(flat_clusters):
     cluster_dict = {}
 
+    print('FLAT CLUSTETRS', flat_clusters)
+    if flat_clusters.empty:
+        return {
+            "zscore_velocity": 0,
+            "zscore_onset_time": 0,
+            "velocity_km_s": 0,
+            "onset_time_idx": 0,
+            'onset_time_inverse_idx': 0,
+            'onset_date': 0,
+            'onset_datetime': 0,
+            "angular_width": 0,
+            'fill_factor': 0,
+            'THETA': -1
+        }
+    
     for cluster_id in flat_clusters['cme_cluster_id'].unique():
 
         cluster = flat_clusters[flat_clusters['cme_cluster_id'] == cluster_id]

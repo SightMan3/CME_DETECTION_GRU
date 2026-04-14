@@ -48,7 +48,7 @@ class Lasco:
         if custom_target_dir:
             target_dir = custom_target_dir if custom_target_dir.endswith("/") else custom_target_dir + "/"
         else:
-            target_dir = f"data_processed/lasco/{detector}/"
+            target_dir = f"C:\\Users\\Lukas\\Desktop\\ard\\CME_DETECTION_GRU\\data_processed\\lasco\\c3\\"
 
         df = self._transform_data(hapi_data)
 

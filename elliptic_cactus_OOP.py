@@ -290,6 +290,9 @@ class CMEDetector:
         # Fetching images specifically sorted
         img_files = sorted([im for im in os.listdir(self.base_folder) if im.endswith('.png')])
 
+        if flat_clusters.empty:
+            return {}
+
         for cluster_id in flat_clusters['cme_cluster_id'].unique():
             cluster = flat_clusters[flat_clusters['cme_cluster_id'] == cluster_id]
             cluster = cluster.sort_values('angle')
@@ -393,10 +396,11 @@ class CMEDetector:
         print("\n--- Process Complete ---")
         print(json.dumps(self.cluster_dict, indent=4))
 
-        for d in self.cluster_dict:
-            if self.cluster_dict[d]['THETA'] > self.best_cluster_QS:
-                self.best_cluster_QS = self.cluster_dict[d]['THETA']
-                self.best_detection_dict = self.cluster_dict[d]
+        if not self.cluster_dict:
+            for d in self.cluster_dict:
+                if self.cluster_dict[d]['THETA'] > self.best_cluster_QS:
+                    self.best_cluster_QS = self.cluster_dict[d]['THETA']
+                    self.best_detection_dict = self.cluster_dict[d]
 
 # ==========================================
 # How to use the class

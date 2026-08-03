@@ -24,6 +24,7 @@ from skimage.morphology import disk, closing, footprint_rectangle
 
 from sklearn.cluster import DBSCAN
 from sklearn.linear_model import RANSACRegressor
+from scipy.interpolate import interp1d
 
 import warnings
 
@@ -133,6 +134,9 @@ def run_pipeline(dir_path):
     theta_arcsec = np.arctan2(y_arcsec, x_arcsec)
     theta_arcsec = np.mod(theta_arcsec, 2 * np.pi)
 
+    R_MIN_ARCSEC = 4.7 * rsun_pixels * arcsec_per_pixel
+    R_MAX_ARCSEC = 512 * arcsec_per_pixel
+
     # ── Pylon angle detection ──
     best_pylon_cover = None
     phi = None
@@ -185,7 +189,7 @@ def run_pipeline(dir_path):
     def unroll_to_polar(img, r_arcsec_array, theta_arcsec_array,
                         num_radii=512, num_angles=360):
         R_max   = r_arcsec_array.max()
-        R_new   = np.linspace(r_arcsec_array.min(), R_max, num_radii)
+        R_new = np.linspace(R_MIN_ARCSEC, R_MAX_ARCSEC, num_radii)
         Theta_new = np.linspace(0, 2 * np.pi, num_angles, endpoint=False)
         R_grid, Theta_grid = np.meshgrid(R_new, Theta_new)
 
@@ -219,6 +223,31 @@ def run_pipeline(dir_path):
             j_map_slices.append(clean_radial_slice)
 
         return np.stack(j_map_slices, axis=0)
+
+    def resample_jmap_to_constant_cadence(j_map, cum_times_seconds, target_cadence_mins=12):
+        """
+        Interpolates a J-map with variable time gaps to a constant time step.
+        
+        j_map: The original 2D array [Time, Space]
+        cum_times_seconds: 1D array of exact seconds for each row in j_map
+        target_cadence_mins: The constant time step you want (e.g., 12 mins)
+        """
+        # The original time axis in minutes
+        original_times_mins = (cum_times_seconds / 60.0)
+        
+        # Create a new, perfectly even time axis (every 12 minutes)
+        max_time = original_times_mins[-1]
+        new_times_mins = np.arange(0, max_time + target_cadence_mins, target_cadence_mins)
+        
+        # Interpolate the J-map along the time axis (axis 0)
+        # interp1d creates a mathematical function from your data
+        print("O"*50 + f"{len(original_times_mins)}, {j_map.shape}")
+        interpolator = interp1d(original_times_mins, j_map, axis=0, kind='linear', fill_value="extrapolate")
+        
+        # Generate the new J-map using the perfectly even time steps
+        resampled_jmap = interpolator(new_times_mins)
+        
+        return resampled_jmap
 
     def cme_blob_detection(j_map, percentil, disk_size, verbose=False):
         j_map_clean = np.nan_to_num(j_map, nan=0.0, posinf=0.0, neginf=0.0)
@@ -255,51 +284,44 @@ def run_pipeline(dir_path):
             min_y_edge = [np.min(y_coords[x_coords == r]) for r in unique_radii]
             max_y_edge = [np.max(y_coords[x_coords == r]) for r in unique_radii]
 
-            # -------------------------------------------------------------
-            # NEW: RANSAC Velocity Approximation
-            # -------------------------------------------------------------
 
-            if props.axis_minor_length > 15: 
-                threshold = 3.0
-            else:
-                threshold = 1.0
-            
-            # RANSAC requires 2D arrays for X. Reshape unique_radii from (N,) to (N, 1)
+            # slope_min = np.polyfit(unique_radii, min_y_edge, 1)[0]
+            # slope_max = np.polyfit(unique_radii, max_y_edge, 1)[0]
+            # slope = min(abs(slope_min), abs(slope_max))
+
+            # -------------------------------------------------------------
+            # THE RANSAC FIX (Restored)
+            # -------------------------------------------------------------
+            # Reshape X for scikit-learn
             X = unique_radii.reshape(-1, 1)
             
-            # We wrap the fit in a try-except block just in case a blob is too small
             try:
-                # We fit RANSAC on both the leading and trailing edges.
-                # residual_threshold controls how "thick" a line it considers valid.
-                # 1.0 means it only trusts points within 1 pixel of the mathematical line.
-                ransac_min = RANSACRegressor(residual_threshold=threshold)
+                # residual_threshold=1.0 forces it to ignore the "fat" from disk()
+                ransac_min = RANSACRegressor(residual_threshold=1.0, random_state=42)
                 ransac_min.fit(X, min_y_edge)
                 slope_min = ransac_min.estimator_.coef_[0]
 
-                ransac_max = RANSACRegressor(residual_threshold=threshold)
+                ransac_max = RANSACRegressor(residual_threshold=1.0, random_state=42)
                 ransac_max.fit(X, max_y_edge)
                 slope_max = ransac_max.estimator_.coef_[0]
                 
-                # Keep your original slope selection logic
                 slope = min(abs(slope_min), abs(slope_max))
                 
             except ValueError:
-                # Fallback to polyfit if RANSAC fails (e.g., too few points)
+                # Fallback to polyfit if the blob is too small for RANSAC
                 slope_min = np.polyfit(unique_radii, min_y_edge, 1)[0]
                 slope_max = np.polyfit(unique_radii, max_y_edge, 1)[0]
                 slope = min(abs(slope_min), abs(slope_max))
-
-            # -------------------------------------------------------------
-            # End RANSAC
-            # -------------------------------------------------------------
+            # ------------------------------------------------------------
             
             track_length_x = np.max(x_coords) - np.min(x_coords)
             if track_length_x < 30 or slope <= 0.02:
                 continue
 
-            R_arcsec_max = (1024 / 2) * arcsec_per_pixel
-            R_arcsec_min = 3.7 * rsun_pixels * arcsec_per_pixel
-            dr_arcsec_per_pixel = (R_arcsec_max - R_arcsec_min) / 512 
+            # R_arcsec_max = (1024 / 2) * arcsec_per_pixel
+            # R_arcsec_min = 3.7 * rsun_pixels * arcsec_per_pixel
+            # dr_arcsec_per_pixel = (R_arcsec_max - R_arcsec_min) / 512 
+            dr_arcsec_per_pixel = (R_MAX_ARCSEC - R_MIN_ARCSEC) / 512
             dt_seconds = 12 * 60.0 
 
             velocity_arcsec_per_sec = abs(1.0 / slope) * (dr_arcsec_per_pixel / dt_seconds)
@@ -321,12 +343,40 @@ def run_pipeline(dir_path):
         rows = []
         for angle in range(0, 360, 5):
             j_map = create_jmap(images_in, angle)
-            cme   = cme_blob_detection(j_map, percentil=97,
-                                       disk_size=2,
-                                       verbose=False)
-            for r in cme:
-                r['angle'] = angle
-                rows.append(r)
+            
+            total_duration_sec = cum_times[-1] - cum_times[0]
+            expected_intervals = total_duration_sec / 720
+            actual_intervals = len(cum_times) - 1
+            print(50*'-' + f"{actual_intervals}, {j_map.shape}")
+            cadence_score = actual_intervals / expected_intervals
+            
+            if cadence_score < 0.7:
+                # FIX 1: Drop the first timestamp to match the running difference length (N-1)
+                cum_times_diff = cum_times[1:]
+                
+                original_jmap_len = j_map.shape[0]
+                
+                # Pass the sliced time array
+                j_map_resampled = resample_jmap_to_constant_cadence(j_map=j_map, cum_times_seconds=cum_times_diff)
+                resampled_jmap_len = j_map_resampled.shape[0]
+                
+                cme = cme_blob_detection(j_map_resampled, percentil=97, disk_size=2, verbose=False)
+                
+                # FIX 2: Scale the onset index back to original J-map space
+                scale_factor = original_jmap_len / resampled_jmap_len
+                
+                for r in cme:
+                    r['angle'] = angle
+                    # Convert the resampled index back to normal index so the dates work
+                    r['t_onset_idx'] = r['t_onset_idx'] * scale_factor
+                    rows.append(r)
+            else:
+                # Cadence is good, run normally
+                cme = cme_blob_detection(j_map, percentil=97, disk_size=2, verbose=False)
+                for r in cme:
+                    r['angle'] = angle
+                    rows.append(r)
+                    
         return pd.DataFrame(rows)
 
     def fill_factor(cluster):
@@ -341,8 +391,67 @@ def run_pipeline(dir_path):
             return 0.0, 0.0
         FF_c1 = (len(c1_angles) / ((c1_AW / 5) + 1)) * 100
         return min(100.0, FF_c1), c1_AW
+    
+    def estimate_angular_width(diff_ims, percentile_threshold=95):
+        """
+        Estimates the angular width of the CME from polar difference images.
+        NaN-safe to handle occulter and pylon masks.
+        """
+        cube = np.stack(diff_ims, axis=0)
+        
+        # 1. Use nanmax to ignore the NaNs from the pylon and edges!
+        # We use warnings.catch_warnings to suppress the warning Numpy gives 
+        # when it encounters a slice that is *entirely* NaNs.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            max_intensity_profile = np.nanmax(cube, axis=(0, 1))
+            
+        # 2. Use nanpercentile for the threshold
+        threshold = np.nanpercentile(max_intensity_profile, percentile_threshold)
+        
+        active_angles = np.where(max_intensity_profile > threshold)[0]
+        
+        if len(active_angles) <= 1:
+            return 0 # No significant CME found
+            
+        num_angles = diff_ims[0].shape[1] # Usually 360
+        
+        # 3. Calculate internal gaps
+        diffs = np.diff(active_angles)
+        
+        # 4. Calculate the gap that wraps across the 360 -> 0 line
+        wrap_gap = (num_angles - active_angles[-1]) + active_angles[0]
+        
+        # 5. Combine all gaps to find the true largest empty space
+        all_gaps = np.append(diffs, wrap_gap)
+        max_gap = np.max(all_gaps)
+        
+        # If the largest empty gap is greater than 90 degrees, it's a partial CME.
+        if max_gap > (num_angles / 4): 
+            width_pixels = num_angles - max_gap
+        else:
+            width_pixels = num_angles
+            
+        degrees_per_pixel = 360.0 / num_angles
+        angular_width_deg = width_pixels * degrees_per_pixel
+        
+        return angular_width_deg
+    
+    def correct_projection_effect(velocity_pos_km_s, angular_width_deg):
+        """
+        Reduces the apparent Plane-of-Sky speed for wide Halo CMEs 
+        to approximate the true 3D radial speed.
+        """
+        if angular_width_deg <= 120:
+            return velocity_pos_km_s
 
-    def quality_score(flat_clusters):
+        halo_factor = min((angular_width_deg - 120) / 240.0, 1.0)
+        max_penalty = 0.15  # Up to 15% reduction for a full 360 Halo
+        correction_multiplier = 1.0 - (halo_factor * max_penalty)
+
+        return velocity_pos_km_s * correction_multiplier
+
+    def quality_score(flat_clusters, diff_ims):
         cluster_dict = {}
 
         if flat_clusters.empty:
@@ -371,15 +480,18 @@ def run_pipeline(dir_path):
             smoothed_velocities = cluster['velocity_km_s'].rolling(window=3, center=True, min_periods=1).median()
             true_cme_velocity = smoothed_velocities.max()
 
+            FF, __AW = fill_factor(cluster)
+            AW = estimate_angular_width(diff_ims)
+            true_cme_velocity_corrected = correct_projection_effect(true_cme_velocity, __AW.item())
+
             v = cluster['velocity_km_s']
             t = cluster['t_onset_idx']
 
             cv_t = t.std() / t.mean() if t.mean() != 0 else 1.0
             cv_v = v.std() / v.mean() if v.mean() != 0 else 1.0
 
-            FF, AW = fill_factor(cluster)
 
-            norm_AW   = AW / 360.0
+            norm_AW   = __AW / 360.0
             norm_FF   = FF / 100.0
             norm_cv_v = max(0.0, 1.0 - cv_v)
             norm_cv_t = max(0.0, 1.0 - cv_t)
@@ -394,12 +506,12 @@ def run_pipeline(dir_path):
             cluster_dict[cluster_id.item()] = {
                 "zscore_velocity":        cv_v.item(),
                 "zscore_onset_time":      cv_t.item(),
-                "velocity_km_s":          true_cme_velocity.item(),
+                "velocity_km_s":          true_cme_velocity_corrected.item(),
                 "onset_time_idx":         ot,
                 'onset_time_inverse_idx': iot,
                 'onset_date':             onset_image_date,
                 'onset_datetime':         onset_image_datetime,
-                "angular_width":          AW.item(),
+                "angular_width":          __AW.item(), ## in the case __AW use __AW.item()
                 'fill_factor':            FF,
                 'THETA':                  qs.item()
             }
@@ -468,7 +580,7 @@ def run_pipeline(dir_path):
         flat_clusters = pd.concat([flat_clusters, cc])
 
 
-    cluster_dict = quality_score(flat_clusters)
+    cluster_dict = quality_score(flat_clusters, running_difference)
     print(json.dumps(cluster_dict, indent=4))
 
     best_cluster_QS = -np.inf

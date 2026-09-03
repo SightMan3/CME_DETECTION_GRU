@@ -175,7 +175,7 @@ def run_pipeline(dir_path):
         yr = (yi - center_y) * arcsec_per_pixel
 
         r_local     = np.sqrt(xr**2 + yr**2)
-        theta_local = np.arctan2(yr, xr)
+        theta_local = np.mod(np.arctan2(yr, xr), 2 * np.pi)
 
         mask = (
             (r_local < 4.7 * rsun_pixels * arcsec_per_pixel) |
@@ -392,64 +392,7 @@ def run_pipeline(dir_path):
         FF_c1 = (len(c1_angles) / ((c1_AW / 5) + 1)) * 100
         return min(100.0, FF_c1), c1_AW
     
-    def estimate_angular_width(diff_ims, percentile_threshold=95):
-        """
-        Estimates the angular width of the CME from polar difference images.
-        NaN-safe to handle occulter and pylon masks.
-        """
-        cube = np.stack(diff_ims, axis=0)
-        
-        # 1. Use nanmax to ignore the NaNs from the pylon and edges!
-        # We use warnings.catch_warnings to suppress the warning Numpy gives 
-        # when it encounters a slice that is *entirely* NaNs.
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", RuntimeWarning)
-            max_intensity_profile = np.nanmax(cube, axis=(0, 1))
-            
-        # 2. Use nanpercentile for the threshold
-        threshold = np.nanpercentile(max_intensity_profile, percentile_threshold)
-        
-        active_angles = np.where(max_intensity_profile > threshold)[0]
-        
-        if len(active_angles) <= 1:
-            return 0 # No significant CME found
-            
-        num_angles = diff_ims[0].shape[1] # Usually 360
-        
-        # 3. Calculate internal gaps
-        diffs = np.diff(active_angles)
-        
-        # 4. Calculate the gap that wraps across the 360 -> 0 line
-        wrap_gap = (num_angles - active_angles[-1]) + active_angles[0]
-        
-        # 5. Combine all gaps to find the true largest empty space
-        all_gaps = np.append(diffs, wrap_gap)
-        max_gap = np.max(all_gaps)
-        
-        # If the largest empty gap is greater than 90 degrees, it's a partial CME.
-        if max_gap > (num_angles / 4): 
-            width_pixels = num_angles - max_gap
-        else:
-            width_pixels = num_angles
-            
-        degrees_per_pixel = 360.0 / num_angles
-        angular_width_deg = width_pixels * degrees_per_pixel
-        
-        return angular_width_deg
     
-    def correct_projection_effect(velocity_pos_km_s, angular_width_deg):
-        """
-        Reduces the apparent Plane-of-Sky speed for wide Halo CMEs 
-        to approximate the true 3D radial speed.
-        """
-        if angular_width_deg <= 120:
-            return velocity_pos_km_s
-
-        halo_factor = min((angular_width_deg - 120) / 240.0, 1.0)
-        max_penalty = 0.15  # Up to 15% reduction for a full 360 Halo
-        correction_multiplier = 1.0 - (halo_factor * max_penalty)
-
-        return velocity_pos_km_s * correction_multiplier
 
     def quality_score(flat_clusters, diff_ims):
         cluster_dict = {}
@@ -481,8 +424,6 @@ def run_pipeline(dir_path):
             true_cme_velocity = smoothed_velocities.max()
 
             FF, __AW = fill_factor(cluster)
-            AW = estimate_angular_width(diff_ims)
-            true_cme_velocity_corrected = correct_projection_effect(true_cme_velocity, __AW.item())
 
             v = cluster['velocity_km_s']
             t = cluster['t_onset_idx']
@@ -506,12 +447,12 @@ def run_pipeline(dir_path):
             cluster_dict[cluster_id.item()] = {
                 "zscore_velocity":        cv_v.item(),
                 "zscore_onset_time":      cv_t.item(),
-                "velocity_km_s":          true_cme_velocity_corrected.item(),
+                "velocity_km_s":          true_cme_velocity.item(),
                 "onset_time_idx":         ot,
                 'onset_time_inverse_idx': iot,
                 'onset_date':             onset_image_date,
                 'onset_datetime':         onset_image_datetime,
-                "angular_width":          __AW.item(), ## in the case __AW use __AW.item()
+                "angular_width":          __AW.item(),
                 'fill_factor':            FF,
                 'THETA':                  qs.item()
             }
@@ -609,7 +550,7 @@ if __name__ == '__main__':
         # ── Normal mode: optionally download, then run once ──
         decision = input('Want to download images? (y/n): ')
         if decision.lower() == 'y':
-            folder = './data_processed/lasco/c3/'
+            folder = '/home/lukas/projects/CME_DETECTION_GRU/data_processed/lasco/c3/'
             for filename in os.listdir(folder):
                 file_path = os.path.join(folder, filename)
                 try:
@@ -625,11 +566,11 @@ if __name__ == '__main__':
 
             download_metadata(start_date, folder)
             lasco = Lasco(start_date, stop_date)
-            lasco.extract_data("c3")
+            lasco.extract_data(custom_target_dir=folder, detector="c3", skip_images=0, verbose=True)
 
         
         try:
-            run_pipeline('./data_processed/lasco/c3')
+            run_pipeline('/home/lukas/projects/CME_DETECTION_GRU/data_processed/lasco/c3')
         except e:
             print(e)
 
@@ -641,8 +582,8 @@ if __name__ == '__main__':
         #
         test_dirs = []
 
-        for dr in os.listdir('./data_processed/testing_images_c3/'):
-            test_dirs.append('./data_processed/testing_images_c3/' + dr)
+        for dr in os.listdir('/home/lukas/projects/CME_DETECTION_GRU/data_processed/testing_images_c3/'):
+            test_dirs.append('/home/lukas/projects/CME_DETECTION_GRU/data_processed/testing_images_c3/' + dr)
 
         print(test_dirs)
 
